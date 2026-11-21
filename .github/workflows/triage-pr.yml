@@ -1,0 +1,113 @@
+name: PR 요약
+
+# 시연 저장소 내부 브랜치의 PR이 열리거나 커밋이 추가되면 요약 → 보고서 → 게시
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: triage-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+env:
+  # 에이전트 코드 버전. 게시기(개발 저장소 PR #29)가 main에 병합되면 main 커밋으로 바꾼다.
+  AGENT_REPOSITORY: Gosu0101/llm-github-triage-agent
+  AGENT_REF: a86e1de36dc1b22f6ba80ea8b0f9faea4630d82c
+  # 'true'일 때만 댓글을 실제로 게시한다. 그 전에는 미리보기만 로그에 남긴다.
+  PUBLISH: 'false'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  summarize:
+    # 포크 PR은 범위 밖 (1차시 결정)
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: 시연 저장소 스크립트 받기
+        uses: actions/checkout@v6
+        with:
+          path: demo
+          persist-credentials: false
+
+      - name: 에이전트 코드 받기
+        uses: actions/checkout@v6
+        with:
+          repository: ${{ env.AGENT_REPOSITORY }}
+          ref: ${{ env.AGENT_REF }}
+          path: agent
+          persist-credentials: false
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: 에이전트 설치
+        run: |
+          python -m pip install ./agent
+          echo "agent commit: $(git -C agent rev-parse HEAD)"
+
+      - name: 입력 만들기
+        id: inputs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python demo/.github/scripts/build_inputs.py pr
+          --event "$GITHUB_EVENT_PATH" --repository "$GITHUB_REPOSITORY" --output work/inputs
+
+      - name: PR 요약
+        id: summary
+        continue-on-error: true
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          CASE_ID: ${{ steps.inputs.outputs.case_id }}
+        run: >-
+          python -B -m triage_agent.pr_summary
+          --inputs work/inputs/prs.json --case-id "$CASE_ID"
+          --model gemini-3.6-flash --fit-patches --execute --output work/pr
+
+      - name: 보고서 만들기
+        run: |
+          python -B -m triage_agent.feature_report --pr-inputs work/inputs/prs.json \
+            --pr-summaries work/pr/results --output work/report
+          cat work/report/report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 게시 미리보기
+        env:
+          NUMBER: ${{ github.event.pull_request.number }}
+        run: >-
+          python -B -m triage_agent.publish --report work/report/report.json
+          --kind pull_request --number "$NUMBER" | tee work/publish-preview.json
+
+      - name: 댓글 게시
+        if: env.PUBLISH == 'true'
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: >-
+          python -B -m triage_agent.publish --report work/report/report.json
+          --kind pull_request --number "$NUMBER" --pr-head-sha "$HEAD_SHA" --publish
+          | tee work/publish-result.json
+
+      - name: 실행 기록 보관
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: triage-pr-${{ github.event.pull_request.number }}-run${{ github.run_number }}-try${{ github.run_attempt }}
+          path: work/
+          if-no-files-found: ignore
+          retention-days: 30
+
+      - name: 분석 실패 확인
+        if: steps.summary.outcome == 'failure'
+        run: |
+          echo "::error::PR 요약 단계가 실패했습니다. 로그와 실행 기록(work 폴더)을 확인하세요."
+          exit 1

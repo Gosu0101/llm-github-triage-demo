@@ -17,8 +17,8 @@ env:
   # 에이전트 코드 버전. 게시기(개발 저장소 PR #29)가 main에 병합되면 main 커밋으로 바꾼다.
   AGENT_REPOSITORY: Gosu0101/llm-github-triage-agent
   AGENT_REF: a86e1de36dc1b22f6ba80ea8b0f9faea4630d82c
-  # 중복 비교 후보 이슈 번호. 비워 두면 중복 판정을 건너뛴다.
-  DUPLICATE_CANDIDATE: ''
+  # 중복 비교 후보 이슈 번호. 비워 두면 중복 판정을 건너뛴다. 첫 시연 후보는 #1.
+  DUPLICATE_CANDIDATE: '1'
   # 'true'일 때만 라벨·댓글을 실제로 게시한다. 그 전에는 미리보기만 로그에 남긴다.
   PUBLISH: 'false'
 
@@ -87,15 +87,17 @@ jobs:
 
       - name: 보고서 만들기
         run: |
-          args=(--issue-inputs work/inputs/issues.json
-                --classifications work/pipeline/classification/results
-                --priorities work/pipeline/priority/results
-                --output work/report)
+          # 분석이 결과 폴더를 만들기 전에 실패해도 입력만으로 보고서를 남긴다 (있는 결과 폴더만 넘김)
+          args=(--issue-inputs work/inputs/issues.json --output work/report)
+          if [ -d work/pipeline/classification/results ]; then args+=(--classifications work/pipeline/classification/results); fi
+          if [ -d work/pipeline/priority/results ]; then args+=(--priorities work/pipeline/priority/results); fi
           if [ -d work/duplicate/results ]; then args+=(--duplicates work/duplicate/results); fi
           python -B -m triage_agent.feature_report "${args[@]}"
           cat work/report/report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: 게시 미리보기
+        id: preview
+        continue-on-error: true
         env:
           NUMBER: ${{ github.event.issue.number }}
         run: >-
@@ -103,7 +105,7 @@ jobs:
           --kind issue --number "$NUMBER" | tee work/publish-preview.json
 
       - name: 라벨·댓글 게시
-        if: env.PUBLISH == 'true'
+        if: env.PUBLISH == 'true' && steps.preview.outcome == 'success'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           NUMBER: ${{ github.event.issue.number }}
@@ -121,7 +123,9 @@ jobs:
           retention-days: 30
 
       - name: 분석 실패 확인
-        if: steps.pipeline.outcome == 'failure' || steps.duplicate.outcome == 'failure'
+        if: >-
+          steps.pipeline.outcome == 'failure' || steps.duplicate.outcome == 'failure'
+          || steps.preview.outcome == 'failure'
         run: |
-          echo "::error::분석 단계가 실패했습니다. 로그와 실행 기록(work 폴더)을 확인하세요."
+          echo "::error::분석 또는 미리보기 단계가 실패했습니다. 실패한 단계 로그와 보고서(Summary, work 폴더)를 확인하세요."
           exit 1

@@ -75,11 +75,15 @@ jobs:
 
       - name: 보고서 만들기
         run: |
-          python -B -m triage_agent.feature_report --pr-inputs work/inputs/prs.json \
-            --pr-summaries work/pr/results --output work/report
+          # 요약이 결과 폴더를 만들기 전에 실패해도 입력만으로 보고서를 남긴다 (있는 결과 폴더만 넘김)
+          args=(--pr-inputs work/inputs/prs.json --output work/report)
+          if [ -d work/pr/results ]; then args+=(--pr-summaries work/pr/results); fi
+          python -B -m triage_agent.feature_report "${args[@]}"
           cat work/report/report.md >> "$GITHUB_STEP_SUMMARY"
 
       - name: 게시 미리보기
+        id: preview
+        continue-on-error: true
         env:
           NUMBER: ${{ github.event.pull_request.number }}
         run: >-
@@ -87,7 +91,7 @@ jobs:
           --kind pull_request --number "$NUMBER" | tee work/publish-preview.json
 
       - name: 댓글 게시
-        if: env.PUBLISH == 'true'
+        if: env.PUBLISH == 'true' && steps.preview.outcome == 'success'
         env:
           GITHUB_TOKEN: ${{ github.token }}
           NUMBER: ${{ github.event.pull_request.number }}
@@ -107,7 +111,7 @@ jobs:
           retention-days: 30
 
       - name: 분석 실패 확인
-        if: steps.summary.outcome == 'failure'
+        if: steps.summary.outcome == 'failure' || steps.preview.outcome == 'failure'
         run: |
-          echo "::error::PR 요약 단계가 실패했습니다. 로그와 실행 기록(work 폴더)을 확인하세요."
+          echo "::error::PR 요약 또는 미리보기 단계가 실패했습니다. 실패한 단계 로그와 보고서(Summary, work 폴더)를 확인하세요."
           exit 1

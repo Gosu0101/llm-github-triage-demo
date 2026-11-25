@@ -18,7 +18,7 @@ env:
   AGENT_REPOSITORY: Gosu0101/llm-github-triage-agent
   AGENT_REF: a86e1de36dc1b22f6ba80ea8b0f9faea4630d82c
   # 'true'일 때만 댓글을 실제로 게시한다. 그 전에는 미리보기만 로그에 남긴다.
-  PUBLISH: 'false'
+  PUBLISH: 'true'
 
 defaults:
   run:

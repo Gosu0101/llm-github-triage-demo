@@ -20,7 +20,7 @@ env:
   # 중복 비교 후보 이슈 번호. 비워 두면 중복 판정을 건너뛴다. 첫 시연 후보는 #1.
   DUPLICATE_CANDIDATE: '1'
   # 'true'일 때만 라벨·댓글을 실제로 게시한다. 그 전에는 미리보기만 로그에 남긴다.
-  PUBLISH: 'false'
+  PUBLISH: 'true'
 
 defaults:
   run:
